@@ -105,7 +105,7 @@ exec(compile(open('frontmark/__about__.py').read(), 'frontmark/__about__.py', 'e
 
 needs_pytest = {'pytest', 'test', 'ptr'}.intersection(sys.argv)
 
-install_requires = ['pelican>=3.7.0', 'pyyaml', 'commonmark']
+install_requires = ['pelican>=3.7.0', 'pyyaml']
 setup_requires = ['pytest-runner'] if needs_pytest else []
 tests_require = ['pytest', 'pyquery']
 qa_require = ['pytest-cov', 'flake8']
@@ -116,9 +116,9 @@ setup(
     version=__version__,  # noqa
     description=__description__,  # noqa
     long_description=long_description,
-    url='https://github.com/noirbizarre/pelican-frontmark',
-    author='Axel Haustant',
-    author_email='noirbizarre+github@gmail.com',
+    url='https://github.com/markphilpot/pelican-frontmark',
+    author='Mark Philpot',
+    author_email='mark.philpot@gmail.com',
     packages=find_packages(),
     include_package_data=True,
     install_requires=install_requires,

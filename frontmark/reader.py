@@ -3,13 +3,6 @@ import logging
 import re
 
 try:
-    import CommonMark
-    from CommonMark.common import escape_xml
-    from CommonMark.render.html import potentially_unsafe
-except ImportError:  # pragma: no cover
-    CommonMark = False
-
-try:
     import yaml
 except ImportError as e:  # pragma: no cover
     yaml = False
@@ -17,9 +10,11 @@ except ImportError as e:  # pragma: no cover
 from pelican.readers import BaseReader
 from pelican.utils import pelican_open
 
-from pygments import highlight
-from pygments.formatters import HtmlFormatter
-from pygments.lexers import TextLexer, get_lexer_by_name
+
+try:
+    from markdown import Markdown
+except ImportError:
+    Markdown = False # NOQA
 
 from .signals import frontmark_yaml_register
 
@@ -33,99 +28,31 @@ STR_TAG = 'tag:yaml.org,2002:str'
 INTERNAL_LINK = re.compile(r'^%7B(\w+)%7D')
 
 
-class HtmlRenderer(CommonMark.HtmlRenderer):
-    '''
-    An altered CommonMark HTML rendered taking reader settings in account.
-    '''
-
-    linkable_tags = ('a', 'img')
-    linkable_attrs = ('href', 'src')
-
-    def __init__(self, reader):
-        self.reader = reader
-        super().__init__()
-
-    @property
-    def use_pygments(self):
-        return bool(self.reader.pygments_options)
-
-    @property
-    def pygments_options(self):
-        if isinstance(self.reader.pygments_options, dict):
-            return self.reader.pygments_options
-        return {}
-
-    def tag(self, name, attrs=None, selfclosing=None):
-        """Helper function to produce an HTML tag."""
-        if self.disable_tags > 0:
-            return
-
-        if name in self.linkable_tags and attrs and len(attrs) > 0:
-            for attrib in attrs:
-                if attrib[0] in self.linkable_attrs:
-                    attrib[1] = INTERNAL_LINK.sub('{\g<1>}', attrib[1])
-
-        super().tag(name, attrs, selfclosing)
-
-    def escape(self, text, preserve_entities):
-        escaped = escape_xml(text, preserve_entities)
-        return INTERNAL_LINK.sub('{\g<1>}', escaped)
-
-    def image(self, node, entering):
-        '''
-        Copy-pasted from upstream class until
-        https://github.com/rtfd/CommonMark-py/pull/90 is merged
-        '''
-        if entering:
-            if self.disable_tags == 0:
-                if self.options.get('safe') and \
-                   potentially_unsafe(node.destination):
-                    self.lit('<img src="" alt="')
-                else:
-                    self.lit('<img src="' +
-                             self.escape(node.destination, True) +
-                             '" alt="')
-            self.disable_tags += 1
-        else:
-            self.disable_tags -= 1
-            if self.disable_tags == 0:
-                if node.title:
-                    self.lit('" title="' + self.escape(node.title, True))
-                self.lit('" />')
-
-    def code_block(self, node, entering):
-        '''Output Pygments if required else use default html5 output'''
-        if self.use_pygments:
-            self.cr()
-            info_words = node.info.split() if node.info else []
-
-            if len(info_words) > 0 and len(info_words[0]) > 0:
-                try:
-                    lexer = get_lexer_by_name(info_words[0])
-                except ValueError:
-                    # no lexer found - use the text one instead of an exception
-                    lexer = TextLexer()
-            else:
-                lexer = TextLexer()
-
-            formatter = HtmlFormatter(**self.pygments_options)
-            parsed = highlight(node.literal, lexer, formatter)
-            self.lit(parsed)
-            self.cr()
-        else:
-            super().code_block(node, entering)
-
-
 class FrontmarkReader(BaseReader):
-    '''
-    Reader for CommonMark Markdown files with YAML metadata
-    '''
+    """
+    Reader for Markdown files with YAML metadata
+    """
 
-    enabled = bool(CommonMark) and bool(yaml)
+    enabled = bool(Markdown) and bool(yaml)
     file_extensions = ['md']
+
+    def __init__(self, *args, **kwargs):
+        super(FrontmarkReader, self).__init__(*args, **kwargs)
+        settings = self.settings['MARKDOWN']
+        settings.setdefault('extension_configs', {})
+        settings.setdefault('extensions', [])
+        for extension in settings['extension_configs'].keys():
+            if extension not in settings['extensions']:
+                settings['extensions'].append(extension)
+        if 'markdown.extensions.meta' not in settings['extensions']:
+            settings['extensions'].append('markdown.extensions.meta')
+
+        self._source_path = None
+        self._md = None
 
     def read(self, source_path):
         self._source_path = source_path
+        self._md = Markdown(**self.settings['MARKDOWN'])
 
         with pelican_open(source_path) as text:
             metadata, content = self._parse(text)
@@ -134,10 +61,10 @@ class FrontmarkReader(BaseReader):
         return content.strip(), self._parse_metadata(metadata)
 
     def _parse(self, text):
-        '''
+        """
         Parse text with frontmatter, return metadata and content.
         If frontmatter is not found, returns an empty metadata dictionary and original text content.
-        '''
+        """
         # ensure unicode first
         text = str(text).strip()
 
@@ -168,39 +95,30 @@ class FrontmarkReader(BaseReader):
                 output[name] = self.process_metadata(name, value)
         return output
 
-    @property
-    def pygments_options(self):
-        '''Optionnal Pygments options'''
-        return self.settings.get('FRONTMARK_PYGMENTS')
-
     def _render(self, text):
-        '''Render CommonMark with ettings taken in account'''
-        parser = CommonMark.Parser()
-        ast = parser.parse(text)
-        renderer = HtmlRenderer(self)
-        html = renderer.render(ast)
-        return html
+        """Render Markdown with settings taken in account"""
+        return self._md.convert(text)
 
     def yaml_markdown_constructor(self, loader, node):
-        '''Allows to optionnaly parse Markdown in multiline literals'''
+        """Allows to optionnaly parse Markdown in multiline literals"""
         value = loader.construct_scalar(node)
         return self._render(value).strip()
 
     def yaml_multiline_as_markdown_constructor(self, loader, node):
-        '''Allows to optionnaly parse Markdown in multiline literals'''
+        """Allows to optionally parse Markdown in multiline literals"""
         value = loader.construct_scalar(node)
         return self._render(value).strip() if node.style == '|' else value
 
     @property
     def loader_class(self):
         class FrontmarkLoader(yaml.Loader):
-            '''
+            """
             Custom YAML Loader for frontmark
 
             - Mapping order is respected (wiht OrderedDict)
-            '''
+            """
             def construct_mapping(self, node, deep=False):
-                '''User OrderedDict as default for mappings'''
+                """User OrderedDict as default for mappings"""
                 return collections.OrderedDict(self.construct_pairs(node))
 
         FrontmarkLoader.add_constructor('!md', self.yaml_markdown_constructor)
